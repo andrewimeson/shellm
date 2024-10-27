@@ -10,7 +10,7 @@ USE_TOOL=0
 declare -A TOOLS=()
 
 # Global variables for system prompts
-SYSTEM_PROMPT_INSTRUCT="You are Shellma, a helpful AI assistant capable of processing requests efficiently."
+SYSTEM_PROMPT_INSTRUCT="You are Shellm, a helpful AI assistant capable of processing requests efficiently."
 SYSTEM_PROMPT_TOOL='You are a super-intelligent tool-calling agent embedded in an AI application. 
 Your purpose is to select and configure tools based on user input.
 You are specifically trained to achieve the best possible results by thinking step by step.
@@ -299,5 +299,3 @@ if [ "$USE_TOOL" -eq 1 ]; then
 else
   generate_response "$MODEL_SMALL" "$PROMPT" "$NUM_PREDICT"
 fi
-
-log debug "Script execution completed."
