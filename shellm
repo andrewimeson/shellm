@@ -1,0 +1,303 @@
+#!/bin/bash
+
+# Default Variables
+API_URL="${API_URL:-http://localhost:11434/api}"  # Read API_URL from environment or use default
+MODEL_SMALL="${MODEL_SMALL:-qwen2.5:3b-instruct-q5_K_M}"  # Read API_URL from environment or use default
+NUM_PREDICT=200  # Default number of predictions
+VERBOSE=0  # Default verbose mode off
+USE_TOOL=0
+# Global associative array for tools
+declare -A TOOLS=()
+
+# Global variables for system prompts
+SYSTEM_PROMPT_INSTRUCT="You are Shellma, a helpful AI assistant capable of processing requests efficiently."
+SYSTEM_PROMPT_TOOL='You are a super-intelligent tool-calling agent embedded in an AI application. 
+Your purpose is to select and configure tools based on user input.
+You are specifically trained to achieve the best possible results by thinking step by step.
+Break down the task in small steps: You are encouraged to use multiple tools and craft a coherent toolchain to solve even complex problems. 
+You are allowed to use the same tool multiple times in different configurations.
+
+
+# Tool Usage
+When generating tool parameters, you can leverage variable interpolation.
+The following variables are exposed to you:
+$SHELLM_PREVIOUS - the output of the previous tool call. Use this to post-process output in subsequent tool calls.
+$SHELLM_OUTPUT - the entire output buffer, ie. what the user sees.
+$PROMPT - the initial instructions of the user.
+
+
+
+# Interacting with the user
+
+Keep in mind that ONLY the "say" tool results in output being presented to the user.
+ALL other tools remain silent. Their output is merely stored in $SHELLM_PREVIOUS.
+Therefore, leverage $SHELLM_PREVIOUS in function parameters to consume output from previous tools.
+For example, in other to show the output of a shell command, it must be followed by a "say" tool call which has
+$SHELLM_PREVIOUS as its "message".
+
+## Example
+
+This combination results in the LLM writing a poem about the current day, which is then presented to the user:
+`
+{"function":{"name":"get_current_day"}}
+{"function":{"name":"generate","arguments":{"prompt":"Please write a about $SHELLM_PREVIOUS."}}}
+{"function":{"name":"say","arguments":{"message":"$SHELLM_PREVIOUS"}}}
+`
+You MUST ALWAYS finish a toolchain with a "say" invocation that presents the result of your work.
+You SHOULD prepare the final "say" invocation by letting the LLM create a human-friendly reply with the "generate" tool.
+You are also encouraged to "say" status updates in longer toolchains.
+'
+
+# Output variables
+SHELLM_OUTPUT=""
+SHELLM_PREVIOUS=""
+
+# Function for colored logging with severity levels
+log() {
+  local level="$1"
+  local message="$2"
+  local color
+  case "$level" in
+    debug) color="\e[33m[DEBUG]\e[0m" ;;  # Yellow for debug
+    warning) color="\e[35m[WARNING]\e[0m" ;;  # Magenta for warning
+    error) color="\e[31m[ERROR]\e[0m" ;;  # Red for error
+    *) color="\e[0m" ;;  # Default color
+  esac
+
+  if [ $VERBOSE -eq 1 ]; then
+    echo -e "$color $message" >&2
+  fi
+}
+
+# Function to load tools from JSON file
+load_tools() {
+  local tool_paths=()
+
+  # Respect XDG Base Directory Specification
+  if [[ -n $XDG_CONFIG_HOME ]]; then
+    tool_paths+=("$XDG_CONFIG_HOME/my_app/tools.json")
+  fi
+  tool_paths+=("$HOME/.config/my_app/tools.json")
+  tool_paths+=("$HOME/tools.json")
+  tool_paths+=("$(dirname "$0")/tools.json")  # Script directory
+
+  local merged_tools_json="{}"
+
+  for path in "${tool_paths[@]}"; do
+    if [[ -f $path ]]; then
+      # Merge using jq, user config overrides system config
+      merged_tools_json=$(jq -s '.[0] * .[1]' <(echo "$merged_tools_json") "$path")
+      log debug "Loaded tools from $path"
+    fi
+  done
+
+  # Load the merged tools into the associative array
+  IFS=$'\n'  # Set IFS to newline for proper iteration
+  for tool in $(echo "$merged_tools_json" | jq -c 'to_entries[]'); do
+    local key=$(echo "$tool" | jq -r '.key')
+    local value=$(echo "$tool" | jq -r '.value')
+    TOOLS["$key"]="$value"
+  done
+}
+
+# Initialize the tools by loading them from the JSON file
+load_tools
+
+# Function to display usage
+usage() {
+  echo "Usage: $0 [-u api_url] [-m MODEL_SMALL] [-n num_predict] [-v] [-t] [prompt]"
+  echo "  -u    API URL (default: $API_URL)"
+  echo "  -m    Model name (default: $MODEL_SMALL)"
+  echo "  -n    Number of predictions (default: $NUM_PREDICT)"
+  echo "  -v    Verbose mode (show debug output)"
+  echo "  -t    Activate tool use (uses generate_tool_calls instead of generate_response)"
+  echo "  prompt  Optional prompt (will be prepended if reading from stdin)"
+  exit 1
+}
+
+# Function to generate a response from the model
+generate_response() {
+  local MODEL_SMALL="$1"
+  local prompt="$2"
+  local num_predict="$3"
+
+  log debug "Generating via $MODEL_SMALL, Prompt: $prompt, Num Predict: $num_predict"
+
+  local escaped_prompt
+  escaped_prompt=$(echo "$prompt" | jq -Rsa .)
+  escaped_system_prompt=$(echo "$SYSTEM_PROMPT_INSTRUCT" | jq -Rsa .)
+  log debug "Escaped prompt for JSON: $escaped_prompt"
+
+  # Capture the output of the streaming request into SHELLM_OUTPUT while streaming it
+  SHELLM_OUTPUT=$(curl -sN "$API_URL/generate" \
+    -d "{\"model\": \"$MODEL_SMALL\", \"system\": $escaped_system_prompt, \"prompt\": $escaped_prompt, \"stream\": true, \"options\": { \"num_predict\": $num_predict, \"num_ctx\": 4096 } }" | \
+    stdbuf -o0 jq -j '.response // empty' | \
+    tee /dev/tty)
+}
+
+# New function to make a non-streaming API call and extract tool_calls
+generate_tool_calls() {
+  local MODEL_SMALL="$1"
+  local prompt="$2"
+
+  log debug "Making non-streaming API call with Model: $MODEL_SMALL, Prompt: $prompt"
+
+  local escaped_prompt
+  escaped_prompt=$(echo "$SYSTEM_PROMPT_TOOL\n# Current Task\n$prompt" | jq -Rsa .)
+
+  # Construct the system message
+  local system_message
+  system_message=$(jq -n --arg content "$SYSTEM_PROMPT_TOOL" '{role: "system", content: $content}')
+
+  # Construct the tools JSON using jq
+  local tools_json
+  tools_json=$(printf "%s" "${TOOLS[@]}" | jq -s .)
+
+  # Construct the API payload
+  local payload
+  payload=$(jq -n --arg model "$MODEL_SMALL" --argjson messages "[${system_message}, {\"role\": \"user\", \"content\": $escaped_prompt}]" --argjson tools "$tools_json" \
+        '{model: $model, messages: $messages, stream: false, tools: $tools}')
+  
+  # Log the payload before sending it
+  #log debug "API Payload: $payload"
+
+  # Make the API call and capture the response
+  local response
+  response=$(curl -s "$API_URL/chat" -d "$payload")
+
+  #log debug "API response: $response"
+
+  # Extract tool_calls from the response using jq
+  local tool_calls
+  tool_calls=$(echo "$response" | jq -c '.message.tool_calls // []')
+
+  # Convert tool_calls to a Bash array
+  local tool_calls_array=()
+  while IFS= read -r tool_call; do
+    tool_calls_array+=("$tool_call")
+  done < <(echo "$tool_calls" | jq -c '.[]')
+
+  log debug "Extracted tool_calls: ${tool_calls_array[@]}"
+  
+  SHELLM_PREVIOUS=""  # Store previous output
+  # Iterate over each tool call
+  for tool_call in "${tool_calls_array[@]}"; do
+    log debug "Processing tool_call $tool_call"
+    local tool_name
+    tool_name=$(echo "$tool_call" | jq -r '.function.name')
+
+    # Fetch the corresponding tool definition
+    local tool_def="${TOOLS[$tool_name]}"
+    log debug "Processing tool $tool_name"
+    if [ -z "$tool_def" ]; then
+      log error "Error: Tool '$tool_name' not found in TOOLS array."
+      continue
+    fi
+
+    # Fetch the 'exec' command template
+    local exec_cmd_template
+    exec_cmd_template=$(echo "$tool_def" | jq -r '.function.exec')
+    log debug "Exec template: $exec_cmd_template"
+
+    # Interpolate parameters from tool_call into the exec command
+    local interpolated_cmd="$exec_cmd_template"
+    local parameters
+    parameters=$(echo "$tool_call" | jq -c '.function.arguments // {}')
+
+    # Iterate over each parameter and replace placeholders in the command
+    for param in $(echo "$parameters" | jq -r 'keys[]'); do
+      local value
+      value=$(echo "$parameters" | jq -r --arg param "$param" '.[$param]')
+      interpolated_cmd=${interpolated_cmd//\$\{$param\}/$value}
+    done
+
+    log debug "Executing command: $interpolated_cmd"
+
+    # Execute the interpolated command
+    SHELLM_PREVIOUS=$(eval "$interpolated_cmd" 2> /dev/null)
+
+    # If the tool is "say", echo its output to the terminal
+    if [ "$tool_name" == "say" ]; then
+      echo -n "$SHELLM_PREVIOUS"
+    fi
+    
+    SHELLM_OUTPUT+=$SHELLM_PREVIOUS
+  done
+}
+# Parse command line options
+while getopts ":u:m:n:vth" opt; do
+  case $opt in
+    u) API_URL="$OPTARG" ;;
+    m) MODEL_SMALL="$OPTARG" ;;
+    n) NUM_PREDICT="$OPTARG" ;;
+    v) VERBOSE=1 ;;  # Set verbose mode
+    t) USE_TOOL=1 ;;  # Set tool use flag
+    h) usage ;;
+    \?) log error "Invalid option: -$OPTARG"; usage ;;
+    :) log error "Option -$OPTARG requires an argument."; usage ;;
+  esac
+done
+
+# Shift the parsed options away, so only positional arguments remain
+shift $((OPTIND - 1))
+
+# Handle the prompt as a positional argument
+PROMPT="$*"
+
+# If input is provided via stdin, prepend the optional prompt
+if [ ! -t 0 ]; then
+  STDIN_INPUT=$(cat)
+  PROMPT="${PROMPT}${PROMPT:+ }${STDIN_INPUT}"
+fi
+
+# Default prompt if none was provided
+PROMPT="${PROMPT:-Why is the sky blue? Write a short markdown document}"
+
+log debug "Calling $API_URL with $MODEL_SMALL requesting $NUM_PREDICT tokens"
+log debug "Final prompt: $PROMPT"
+
+# Function to check if the model exists
+check_model_exists() {
+  local model_check
+  log debug "Checking if model $MODEL_SMALL exists on API server..."
+  model_check=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/show" -d "{\"model\": \"$MODEL_SMALL\"}")
+
+  if [[ "$model_check" == "200" ]]; then
+    log debug "Model $MODEL_SMALL exists."
+    return 0
+  else
+    log warning "Model $MODEL_SMALL does not exist. Attempting to pull..."
+    return 1
+  fi
+}
+
+# Function to pull the model
+pull_model() {
+  local pull_response
+  log debug "Attempting to pull model $MODEL_SMALL..."
+  pull_response=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/pull" -d "{\"model\": \"$MODEL_SMALL\", \"stream\": false}")
+
+  if [[ "$pull_response" == "200" ]]; then
+    log debug "Successfully pulled model $MODEL_SMALL."
+  else
+    log error "Error pulling model $MODEL_SMALL. HTTP Status: $pull_response"
+    exit 1
+  fi
+}
+
+# Check if the model exists, if not, pull it
+if ! check_model_exists; then
+  pull_model
+fi
+
+# Call the appropriate function based on tool usage
+if [ "$USE_TOOL" -eq 1 ]; then
+  generate_response "$MODEL_SMALL" "Your task is to prepare instructions for a tool calling ai agent. Gather context and define a high-level plan to tackle the request. Be very concise, you are communicating with a machine. Do not refer to individual tools or spell out detailed instructions. You are a mentor, not a micro-manager. Task: '$PROMPT'" 100
+  echo ""
+  echo ""
+  generate_tool_calls "$MODEL_SMALL" "The request of the user is '$PROMPT'\n# Execution plan\n$SHELLM_OUTPUT\n"
+else
+  generate_response "$MODEL_SMALL" "$PROMPT" "$NUM_PREDICT"
+fi
+
+log debug "Script execution completed."
