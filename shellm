@@ -75,9 +75,9 @@ load_tools() {
 
   # Respect XDG Base Directory Specification
   if [[ -n $XDG_CONFIG_HOME ]]; then
-    tool_paths+=("$XDG_CONFIG_HOME/my_app/tools.json")
+    tool_paths+=("$XDG_CONFIG_HOME/shellm/tools.json")
   fi
-  tool_paths+=("$HOME/.config/my_app/tools.json")
+  tool_paths+=("$HOME/.config/shellm/tools.json")
   tool_paths+=("$HOME/tools.json")
   tool_paths+=("$(dirname "$0")/tools.json")  # Script directory
 

@@ -102,8 +102,8 @@ journalctl -xe | shellm -t "Translate this to Spanish."
 
 Shellm supports user-defined tools specified in JSON files. This allows Shellm to perform operations beyond simple language model predictions, such as executing shell commands or interacting with APIs. A `tools.json` file can be created in the following directories (priority order):
 
-1. `$XDG_CONFIG_HOME/my_app/tools.json`
-2. `~/.config/my_app/tools.json`
+1. `$XDG_CONFIG_HOME/shellm/tools.json`
+2. `~/.config/shellm/tools.json`
 3. `~/tools.json`
 4. `$(dirname "$0")/tools.json` (same directory as the script)
 
@@ -112,18 +112,42 @@ Shellm supports user-defined tools specified in JSON files. This allows Shellm t
 Here’s a sample `tools.json` configuration:
 ```json
 {
-  "say": {
-    "function": {
-      "name": "say",
-      "exec": "echo ${message}"
-    }
-  },
-  "get_current_date": {
-    "function": {
-      "name": "get_current_date",
-      "exec": "date '+%Y-%m-%d'"
-    }
-  }
+	"execute_shell_command": {
+		"type": "function",
+		"function": {
+			"name": "execute_shell_command",
+			"description": "Constructs a shell command with arguments to carry out the request.",
+			"parameters": {
+				"type": "object",
+				"properties": {
+					"command": {
+						"type": "string",
+						"description": "The shell command to execute. Bash syntax is allowed"
+					}
+				},
+				"required": ["command"]
+			},
+			"exec": "bash -c \"${command}\""
+		}
+	},
+	"say": {
+		"type": "function",
+		"function": {
+			"name": "say",
+			"description": "Display a static message to the user.",
+			"parameters": {
+				"type": "object",
+				"properties": {
+					"message": {
+						"type": "string",
+						"description": "The message to display. Remember you can use $SHELLM_PREVIOUS here to display output of previous tools."
+					}
+				},
+				"required": ["message"]
+			},
+			"exec": "echo \"${message}\""
+		}
+	},
 }
 ```
 
