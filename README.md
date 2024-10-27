@@ -1,5 +1,7 @@
 # Shellm: A Simple Ollama Client
 
+![shellm header image](https://github.com/user-attachments/assets/013184c1-56d7-4fb5-ad7f-7adb2970b77f)
+
 **Shellm** is a lightweight client for interacting with the [Ollama](https://ollama.com/) API, written entirely in a single Bash script. It provides a simple interface to generate responses from language models, interact with custom tools, and integrate AI capabilities into everyday Linux workflows.
 
 ## Features
