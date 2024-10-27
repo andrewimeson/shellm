@@ -185,6 +185,10 @@ For verbose output, use the `-v` flag:
 ```bash
 shellm -v "Debug the script behavior."
 ```
+## About the name
+
+Apart from banking on the significant overlap between "shell" and "llm", the name "Shellm" is also extremely close in spelling and pronunciation to the German word "Schelm", which means "rogue", or "jokester".
+This adds charm and character to the tool, so bear this in mind when it fails spectacularly.
 
 ## Contributing
 
