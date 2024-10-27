@@ -9,6 +9,8 @@
 - **Single File Script**: No complex dependencies—just a single Bash file.
 - **API Integration**: Interacts with an Ollama API server to generate predictions.
 - **Tool Execution**: Support for toolchain execution using custom JSON-defined tools.
+- **Expandable**: Tools are read from `tools.json` files according to XDG Base Dir spec. Add your own!
+- **Model Download**: Transparently instructs Ollama to download unknown models
 - **Piping and Chaining**: Seamless integration into shell commands for input/output manipulation.
 - **Verbose Mode**: Detailed debugging for troubleshooting or learning.
 
