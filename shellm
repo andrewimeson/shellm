@@ -193,7 +193,7 @@ local tool_calls_array=("$@")
     for param in $(echo "$parameters" | jq -r 'keys[]'); do
       local value
       value=$(echo "$parameters" | jq -r --arg param "$param" '.[$param]')
-      interpolated_cmd=${interpolated_cmd//\$\{$param\}/${value@Q}}
+      interpolated_cmd=${interpolated_cmd//\$\{$param\}/${value}}
     done
 
     # Interpolate SHELLM_PREVIOUS and SHELLM_OUTPUT into the command
@@ -202,13 +202,19 @@ local tool_calls_array=("$@")
 
     log tool "Executing command: $interpolated_cmd"
 
+    local result
     # Execute the interpolated command
-    SHELLM_PREVIOUS=$(eval "$interpolated_cmd" 2> /dev/null)
+    SHELLM_PREVIOUS=$(eval "$interpolated_cmd")
+    result=$?
+    if [ ! "$result" == 0 ]; then
+      log error "Something went wrong"
+    fi
     log tool "Result: $SHELLM_PREVIOUS"
 
     # If the tool is "say", echo its output to the terminal
     if [ "$tool_name" == "say" ]; then
-      echo -n "$SHELLM_PREVIOUS"
+      echo "$SHELLM_PREVIOUS"
+      echo ""
       SHELLM_OUTPUT+=$SHELLM_PREVIOUS
     fi
   done
@@ -291,9 +297,9 @@ if [ "$USE_TOOL" -eq 1 ]; then
    tool_calls=(
      '{"function":{"name":"generate","arguments":{"prompt":"Generate a compact title and subtitle representing this Task: '$PROMPT'"}}}'
      '{"function":{"name":"say","arguments":{"message":"$SHELLM_PREVIOUS"}}}'
-     '{"function":{"name":"generate","arguments":{"prompt":"Mirror and interpret the request and briefly state that you will proceed to work on a plan. No details yet, but maybe crack a joke. Task: '$PROMPT'"}}}'
+     '{"function":{"name":"generate","arguments":{"prompt":"Your task is: '$PROMPT'. State what you understood from the assignment. Briefly state that you will proceed to work on a plan. No details yet."}}}'
      '{"function":{"name":"say","arguments":{"message":"$SHELLM_PREVIOUS"}}}'
-     '{"function":{"name":"generate","arguments":{"prompt":"Your task is to prepare instructions for a tool calling ai agent. Gather context and define a high-level plan to tackle the request. Be very concise, you are communicating with a machine. Do not refer to individual tools or spell out detailed instructions. You are a mentor, not a micro-manager. Task: '$PROMPT'"}}}'
+     '{"function":{"name":"generate","arguments":{"prompt":"Write down base assumptions and define a high-level plan to tackle the request without suggesting concrete solutions. Based on this plan, an AI agent must later be able to interpret the plan and extract low-level function calls. Be very concise, you are communicating with a machinee. You are a mentor, not a micro-manager. Task: '$PROMPT'"}}}'
      '{"function":{"name":"say","arguments":{"message":"$SHELLM_PREVIOUS"}}}'
    )
   apply_tool_calls "${tool_calls[@]}"
@@ -305,4 +311,5 @@ if [ "$USE_TOOL" -eq 1 ]; then
   apply_tool_calls "${tool_calls[@]}"
 else
   generate_response "$MODEL_SMALL" "$PROMPT" "$NUM_PREDICT"
+  echo ""
 fi
