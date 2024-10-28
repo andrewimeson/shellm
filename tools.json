@@ -27,7 +27,7 @@
 				"properties": {
 					"message": {
 						"type": "string",
-						"description": "The message to display. Remember you can use $SHELLM_PREVIOUS here to display output of previous tools."
+						"description": "The message to display. Use $SHELLM_PREVIOUS here to display output of previous tools."
 					}
 				},
 				"required": ["message"]
@@ -35,6 +35,24 @@
 			"exec": "echo \"${message}\""
 		}
 	},
+    "ask": {
+        "type": "function",
+        "function": {
+            "name": "ask",
+            "description": "Ask the user a question.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message to display. Use $SHELLM_PREVIOUS here to display output of previous tools."
+                    }
+                },
+                "required": ["message"]
+            },
+            "exec": "echo \"${message}\""
+        }
+    },
 	"generate": {
 		"type": "function",
 		"function": {
@@ -52,5 +70,49 @@
 			},
 			"exec": "generate_response \"$MODEL_SMALL\" \"${prompt}\" 200"
 		}
-	}
+	},
+    "conditional": {
+        "type": "function",
+        "function": {
+            "name": "conditional",
+            "description": "Apply .",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "predicate": {
+                        "type": "string",
+                        "description": "Description of the subject and criteria which is then passed to a LLM to review and decide. Use $SHELLM_PREVIOUS here to display output of previous tools."
+                    },
+                    "tools": {
+                        "type": "string",
+                        "description": "The list of tool calls as JSON. Follow the same instructions that were given for the outer tools."
+                    }
+                },
+                "required": ["predicate", "tools"]
+            },
+            "exec": "echo \"${message}\""
+        }
+    },
+    "foreach": {
+        "type": "function",
+        "function": {
+            "name": "conditional",
+            "description": "Apply .",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "predicate": {
+                        "type": "string",
+                        "description": "Description of the subject and criteria which is then passed to a LLM to review and decide. Use $SHELLM_PREVIOUS here to display output of previous tools."
+                    },
+                    "tools": {
+                        "type": "string",
+                        "description": "The list of tool calls as JSON. Follow the same instructions that were given for the outer tools."
+                    }
+                },
+                "required": ["predicate", "tools"]
+            },
+            "exec": "echo \"${message}\""
+        }
+    }
 }
