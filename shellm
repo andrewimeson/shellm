@@ -129,10 +129,11 @@ generate_response() {
   log debug "Escaped prompt for JSON: $escaped_prompt"
 
   # Capture the output of the streaming request into SHELLM_OUTPUT while streaming it
-  SHELLM_OUTPUT=$(curl -sN "$API_URL/generate" \
+  local output=$(curl -sN "$API_URL/generate" \
     -d "{\"model\": \"$MODEL_SMALL\", \"system\": $escaped_system_prompt, \"prompt\": $escaped_prompt, \"stream\": true, \"options\": { \"num_predict\": $num_predict, \"num_ctx\": 4096 } }" | \
     stdbuf -o0 jq -j '.response // empty' | \
-    tee /dev/tty)
+    tee /dev/tty | tee /dev/stdout) # tee sneakily streams the redirected output to the TTY
+  [[ -p /dev/stdout ]] && echo "$output" # Normal echo in case we are being piped
 }
 
 # New function to make a non-streaming API call and extract tool_calls
