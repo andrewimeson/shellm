@@ -116,42 +116,42 @@ Shellm supports user-defined tools specified in JSON files. This allows Shellm t
 Here’s a sample `tools.json` configuration:
 ```json
 {
-	"execute_shell_command": {
-		"type": "function",
-		"function": {
-			"name": "execute_shell_command",
-			"description": "Constructs a shell command with arguments to carry out the request.",
-			"parameters": {
-				"type": "object",
-				"properties": {
-					"command": {
-						"type": "string",
-						"description": "The shell command to execute. Bash syntax is allowed"
-					}
-				},
-				"required": ["command"]
-			},
-			"exec": "bash -c \"${command}\""
-		}
-	},
-	"say": {
-		"type": "function",
-		"function": {
-			"name": "say",
-			"description": "Display a static message to the user.",
-			"parameters": {
-				"type": "object",
-				"properties": {
-					"message": {
-						"type": "string",
-						"description": "The message to display. Remember you can use $SHELLM_PREVIOUS here to display output of previous tools."
-					}
-				},
-				"required": ["message"]
-			},
-			"exec": "echo \"${message}\""
-		}
-	},
+  "execute_shell_command": {
+    "type": "function",
+    "function": {
+      "name": "execute_shell_command",
+      "description": "Constructs a shell command with arguments to carry out the request.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The shell command to execute. Bash syntax is allowed"
+          }
+        },
+        "required": ["command"]
+      },
+      "exec": "bash -c \"${command}\""
+    }
+  },
+  "say": {
+    "type": "function",
+    "function": {
+      "name": "say",
+      "description": "Display a static message to the user.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "The message to display. Remember you can use $SHELLM_PREVIOUS here to display output of previous tools."
+          }
+        },
+        "required": ["message"]
+      },
+      "exec": "echo \"${message}\""
+    }
+  }
 }
 ```
 
