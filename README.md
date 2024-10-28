@@ -102,9 +102,12 @@ To translate system logs to another language:
 journalctl -xe | shellm -t "Translate this to Spanish."
 ```
 
-### Tool Integration
+### Tool Calling
 
-Shellm supports user-defined tools specified in JSON files. This allows Shellm to perform operations beyond simple language model predictions, such as executing shell commands or interacting with APIs. A `tools.json` file can be created in the following directories (priority order):
+Shellm supports user-defined tools specified in JSON files. This allows Shellm to perform operations beyond simple language model predictions, such as executing shell commands or interacting with APIs. 
+This functionality is highly experimental and new tools will be added as soon as the underlying tool pipeline is more robust.
+
+A `tools.json` file can be created in the following directories (priority order):
 
 1. `$XDG_CONFIG_HOME/shellm/tools.json`
 2. `~/.config/shellm/tools.json`
