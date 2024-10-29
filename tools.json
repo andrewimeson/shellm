@@ -9,12 +9,13 @@
 				"properties": {
 					"command": {
 						"type": "string",
-						"description": "The shell command to execute. Bash syntax is allowed"
+						"description": "The shell command to execute. Bash syntax is allowed",
+                        "raw": true
 					}
 				},
 				"required": ["command"]
 			},
-			"exec": "bash -c \"${command}\""
+			"exec": "${command}"
 		}
 	},
 	"say": {
@@ -29,8 +30,7 @@
 						"type": "string",
 						"description": "The message to display. Use $SHELLM_PREVIOUS here to display output of previous tools."
 					}
-				},
-				"required": ["message"]
+				}
 			},
 			"exec": "echo \"${message}\""
 		}
@@ -50,7 +50,7 @@
                 },
                 "required": ["message"]
             },
-            "exec": "echo \"${message}\""
+            "exec": "echo \"${message}\"; exec 1>&-"
         }
     },
 	"generate": {

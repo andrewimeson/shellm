@@ -11,12 +11,12 @@ USE_TOOL=0
 declare -A TOOLS=()
 
 # Global variables for system prompts
-SYSTEM_PROMPT_INSTRUCT="You are Shellm, a helpful AI assistant capable of processing requests efficiently."
-SYSTEM_PROMPT_TOOL='You are a super-intelligent tool-calling agent embedded in an AI application. 
-Your purpose is to select and configure tools based on user input.
-You are specifically trained to achieve the best possible results by thinking step by step.
-Break down the task in small steps: You are encouraged to use multiple tools and craft a coherent toolchain to solve even complex problems. 
-You are allowed to use the same tool multiple times in different configurations.
+SYSTEM_PROMPT_INSTRUCT="You are Shellm, an intelligent AI assistant designed to process user requests with accuracy and efficiency. Your goal is to provide informative and context-aware responses."
+
+SYSTEM_PROMPT_TOOL='You are a highly intelligent agent responsible for selecting and configuring tools based on user instructions.
+Your mission is to analyze tasks thoroughly and create an effective series of tool calls to deliver optimal results.
+Break down tasks into manageable steps, utilizing multiple tools and crafting a coherent toolchain.
+You may reuse tools in various configurations to ensure the best outcome.
 
 
 # Tool Usage
@@ -30,8 +30,8 @@ $PROMPT - the initial instructions of the user.
 
 # Interacting with the user
 
-ONLY the "say" tool results in output being presented to the user.
-ALL other tools remain silent. Their output is merely stored in $SHELLM_PREVIOUS.
+Only the "say" tool outputs results to the user.
+All other tools operate silently, with their outputs stored in \$SHELLM_PREVIOUS for further processing.
 Therefore, leverage $SHELLM_PREVIOUS in function parameters to consume output from previous tools.
 For example, in other to show the output of a shell command, it must be followed by a "say" tool call which has
 $SHELLM_PREVIOUS as its "message".
@@ -52,6 +52,7 @@ You are also encouraged to "say" status updates in longer toolchains.
 # Output variables
 SHELLM_OUTPUT=""
 SHELLM_PREVIOUS=""
+SHELLM_ERROR=""
 
 # Function for colored logging with severity levels
 log() {
@@ -165,8 +166,7 @@ generate_tool_calls() {
 # apply_tool_calls "${tool_calls[@]}"
 #
 apply_tool_calls() {
-local tool_calls_array=("$@")
-  # Iterate over each tool call, processing JSON one by one
+  local tool_calls_array=("$@")
   for tool_call in "${tool_calls_array[@]}"; do
     log debug "Processing tool_call $tool_call"
     local tool_name
@@ -193,7 +193,20 @@ local tool_calls_array=("$@")
     for param in $(echo "$parameters" | jq -r 'keys[]'); do
       local value
       value=$(echo "$parameters" | jq -r --arg param "$param" '.[$param]')
-      interpolated_cmd=${interpolated_cmd//\$\{$param\}/${value}}
+
+      # Check if escaping is required
+      local raw
+      raw=$(echo "$tool_def" | jq -r --arg param "$param" '.function.parameters.properties[$param].raw // false')
+      log tool "Parameter: $param, Value: $value, Escape: $raw"
+      value="${value//&/\\&}"  # Escape ampersands
+      # Conditionally escape or pass as-is based on the "escape" field
+      if [[ ! "$raw" == "true" ]]; then
+        log tool "Escaping parameter: $param"
+        value="${value//\'/\'\"\'\"\'}"  # Escape single quotes
+        value="${value//\`/\\\`}"        # Escape backticks
+      fi
+
+      interpolated_cmd="${interpolated_cmd//\$\{$param\}/$value}"
     done
 
     # Interpolate SHELLM_PREVIOUS and SHELLM_OUTPUT into the command
@@ -202,19 +215,26 @@ local tool_calls_array=("$@")
 
     log tool "Executing command: $interpolated_cmd"
 
-    local result
-    # Execute the interpolated command
-    SHELLM_PREVIOUS=$(eval "$interpolated_cmd")
-    result=$?
-    if [ ! "$result" == 0 ]; then
-      log error "Something went wrong"
+    # Execute the interpolated command, capturing all details
+    # Kudos to madmurphy over at https://stackoverflow.com/a/59592881
+    local exit_code
+    {
+        IFS=$'\n' read -r -d '' SHELLM_PREVIOUS;
+        IFS=$'\n' read -r -d '' SHELLM_ERROR;
+        (IFS=$'\n' read -r -d '' exit_code; return ${_ERRNO_});
+    } < <((printf '\0%s\0%d\0' "$(((({ eval "$interpolated_cmd"; echo "${?}" 1>&3-; } | tr -d '\0' 1>&4-) 4>&2- 2>&1- | tr -d '\0' 1>&4-) 3>&1- | exit "$(cat)") 4>&1-)" "${?}" 1>&2) 2>&1)
+
+    # Check for a nonzero exit code and echo errors if present
+    if [[ $exit_code -ne 0 ]]; then
+      log error "Command '$interpolated_cmd' failed with exit code $exit_code."
+      echo "$SHELLM_ERROR" >&2
+    else
+      log tool "Result: $SHELLM_PREVIOUS"
     fi
-    log tool "Result: $SHELLM_PREVIOUS"
 
     # If the tool is "say", echo its output to the terminal
     if [ "$tool_name" == "say" ]; then
-      echo "$SHELLM_PREVIOUS"
-      echo ""
+      echo -n "$SHELLM_PREVIOUS"
       SHELLM_OUTPUT+=$SHELLM_PREVIOUS
     fi
   done
@@ -292,24 +312,30 @@ if ! check_model_exists; then
   pull_model
 fi
 
+#tool_calls=(
+#  '{"function":{"name":"execute_shell_command","arguments":{"command":"echo LOL 1>&2; exit 1 "}}}'
+#)
+#apply_tool_calls "${tool_calls[@]}"
+#exit
 # Call the appropriate function based on tool usage
 if [ "$USE_TOOL" -eq 1 ]; then
    tool_calls=(
-     '{"function":{"name":"generate","arguments":{"prompt":"Generate a compact title and subtitle representing this Task: '$PROMPT'"}}}'
+     '{"function":{"name":"generate","arguments":{"prompt":"Create a concise title and subtitle that summarize the following task: '$PROMPT'"}}}'
      '{"function":{"name":"say","arguments":{"message":"$SHELLM_PREVIOUS"}}}'
-     '{"function":{"name":"generate","arguments":{"prompt":"Your task is: '$PROMPT'. State what you understood from the assignment. Briefly state that you will proceed to work on a plan. No details yet."}}}'
+     '{"function":{"name":"generate","arguments":{"prompt":"Mirror and interpret the request and briefly state that you will proceed to work on a plan without giving details. Task: '$PROMPT'"}}}'
      '{"function":{"name":"say","arguments":{"message":"$SHELLM_PREVIOUS"}}}'
-     '{"function":{"name":"generate","arguments":{"prompt":"Write down base assumptions and define a high-level plan to tackle the request without suggesting concrete solutions. Based on this plan, an AI agent must later be able to interpret the plan and extract low-level function calls. Be very concise, you are communicating with a machinee. You are a mentor, not a micro-manager. Task: '$PROMPT'"}}}'
+     '{"function":{"name":"generate","arguments":{"prompt":"Prepare concise instructions for a tool-calling AI agent. Summarize the context and outline a high-level strategy to address the following request without detailing specific tools: '$PROMPT'"}}}'
      '{"function":{"name":"say","arguments":{"message":"$SHELLM_PREVIOUS"}}}'
    )
+
   apply_tool_calls "${tool_calls[@]}"
   generate_and_apply_tool_calls "$MODEL_SMALL" 'The request of the user is "'$PROMPT'"\n# Execution plan\n'$SHELLM_PREVIOUS'\n'
   tool_calls=(
-    '{"function":{"name":"generate","arguments":{"prompt":"$SHELLM_OUTPUT\n## Resulting answer from the LLM:\n"}}}'
+    '{"function":{"name":"generate","arguments":{"prompt":"$SHELLM_OUTPUT\n## Summary:\n"}}}'
     '{"function":{"name":"say","arguments":{"message":"$SHELLM_PREVIOUS"}}}'
   )
   apply_tool_calls "${tool_calls[@]}"
+  exit
 else
   generate_response "$MODEL_SMALL" "$PROMPT" "$NUM_PREDICT"
-  echo ""
 fi
