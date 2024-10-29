@@ -18,6 +18,23 @@
 			"exec": "${command}"
 		}
 	},
+    "fork": {
+      "type": "function",
+      "function": {
+        "name": "fork",
+        "description": "Display a static message to the user.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "The message to display. Use $SHELLM_PREVIOUS here to display output of previous tools."
+            }
+          }
+        },
+        "exec": "echo \"${message}\""
+      }
+    },
 	"say": {
 		"type": "function",
 		"function": {
