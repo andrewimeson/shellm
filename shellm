@@ -7,6 +7,7 @@ MODEL_SMALL="${MODEL_SMALL:-qwen2.5:3b-instruct-q5_K_M}"  # Read API_URL from en
 NUM_PREDICT=500  # Default number of predictions
 VERBOSE=2  # Default Errors, Warnings and Tools
 USE_TOOL=0
+SCRIPT_PATH=$(dirname $(realpath -s $0))
 # Global associative array for tools
 declare -A TOOLS=()
 PROMPT_FRAGMENT_AGENT=""
@@ -111,13 +112,13 @@ escape() {
   echo "$escaped_input"
 }
 
-# Function to load tools from JSON file
+# Function to load tools from YAML file
 load_tools() {
-  local tool_paths=("$XDG_CONFIG_HOME/shellm/tools.json" "$HOME/.config/shellm/tools.json" "$HOME/tools.json" "$(dirname "$0")/tools.json")
+  local tool_paths=("$XDG_CONFIG_HOME/shellm/tools.yaml" "$HOME/.config/shellm/tools.yaml" "$HOME/tools.yaml" "$(dirname "$0")/tools.yaml")
   local merged_tools_json="{}"
 
   for path in "${tool_paths[@]}"; do
-    [[ -f $path ]] && merged_tools_json=$(jq -s '.[0] * .[1]' <(echo "$merged_tools_json") "$path") && log debug "Loaded tools from $path"
+    [[ -f $path ]] && merged_tools_json=$(yq -s '.[0] * .[1]' <(echo "$merged_tools_json") "$path") && log debug "Loaded tools from $path"
   done
 
   IFS=$'\n'
@@ -145,18 +146,36 @@ usage() {
 generate_response() {
   local MODEL_SMALL="$1"
   local prompt="$2"
-  local num_predict="$3"
+  local num_predict="$NUM_PREDICT"  # Fallback to global default if not set by -n
+  local json_format=0  # Flag for JSON format
 
-  log debug "Generating via $MODEL_SMALL, Prompt: $prompt, Num Predict: $num_predict"
+  # Parse options within generate_response
+  while getopts ":n:j" opt; do
+    case $opt in
+      n) num_predict="$OPTARG" ;;  # Set num_predict from argument
+      j) json_format=1 ;;          # Enable JSON format
+      \?) log error "Invalid option: -$OPTARG"; usage ;;
+      :) log error "Option -$OPTARG requires an argument."; usage ;;
+    esac
+  done
 
+  shift $((OPTIND - 1))
+
+  # Escape the prompt and system prompt for JSON
   local escaped_prompt
   escaped_prompt=$(echo "$prompt" | jq -Rsa .)
   escaped_system_prompt=$(echo "$SYSTEM_PROMPT_INSTRUCT" | jq -Rsa .)
   log debug "Escaped prompt for JSON: $escaped_prompt"
 
-  # Capture the output of the streaming request into SHELLM_OUTPUT while streaming it
+  # Add "format": "json" if -j flag was set
+  local options
+  options="{\"num_predict\": $num_predict, \"num_ctx\": 4096"
+  [[ $json_format -eq 1 ]] && options+=", \"format\": \"json\""
+  options+="}"
+
+  # Capture the output of the streaming request into SHELLM_OUTPUT
   curl -sN "$API_URL/generate" \
-    -d "{\"model\": \"$MODEL_SMALL\", \"system\": $escaped_system_prompt, \"prompt\": $escaped_prompt, \"stream\": true, \"options\": { \"num_predict\": $num_predict, \"num_ctx\": 4096 } }" | \
+    -d "{\"model\": \"$MODEL_SMALL\", \"system\": $escaped_system_prompt, \"prompt\": $escaped_prompt, \"stream\": true, \"options\": $options }" | \
     stdbuf -o0 jq -j '.response // empty' | escape
   echo ""
 }
@@ -240,11 +259,11 @@ apply_tool_calls() {
       # Check if escaping is required
       local raw
       raw=$(echo "$tool_def" | jq -r --arg param "$param" '.function.parameters.properties[$param].raw // false')
-      log tool "Parameter: $param, Value: $value, Raw: $raw"
+      log debug "Parameter: $param, Value: $value, Raw: $raw"
       value="${value//&/\\&}"  # Escape ampersands
       # Conditionally escape or pass as-is based on the "escape" field
       if [[ ! "$raw" == "true" ]]; then
-        log tool "Escaping parameter: $param"
+        log debug "Escaping parameter: $param"
         value="$(echo "$value" | escape)"
 
       fi
@@ -307,8 +326,12 @@ while getopts ":u:m:n:v:th" opt; do
   esac
 done
 
-# Shift the parsed options away, so only positional arguments remain
+# Determine execution path based on arguments
 shift $((OPTIND - 1))
+if [[ $# -eq 2 ]]; then
+  FUNC="$1"; shift
+  type "$FUNC" &>/dev/null && "$FUNC" "$@" || { log error "Function '$FUNC' not found"; exit 1; }
+fi
 
 # Handle the prompt as a positional argument
 PROMPT="$*"
@@ -367,6 +390,12 @@ gather_system_info() {
   echo "Terminal: $terminal_info\nOS Type: $os_info"
 }
 
+tool_calls=(
+   '{"function":{"name":"while","arguments":{"predicate":"The joke was considered funny","tools":[{"function":{"name":"say","arguments":{"message":"Hi"}}}]}}}'
+ )
+
+ apply_tool_calls "${tool_calls[@]}"
+exit
 # Check if the model exists, if not, pull it
 if ! check_model_exists; then
   pull_model
