@@ -54,17 +54,18 @@ tools:
     function:
       name: execute_shell_command
       description: >-
-        Constructs a shell command with arguments to carry out the request.
+        Executes the specified shell command. Bash syntax allowed. The command string must be complete with all arguments, parameters, redirections and pipes. Multi-line commands are allowed.
       parameters:
         type: object
         properties:
           command:
             type: string
-            description: The shell command to execute. Bash syntax is allowed
+            description: >-
+              The shell command with all arguments. Warning: It is passed into eval as-is.
             raw: true
         required:
           - command
-      exec: '${command}'
+      exec: '{{command}}'
   fork:
     type: function
     function:
@@ -78,21 +79,7 @@ tools:
             description: >-
               The message to display. Use $SHELLM_PREVIOUS here to display output
               of previous tools.
-      exec: 'echo "${message}"'
-  say:
-    type: function
-    function:
-      name: say
-      description: Display a static message to the user.
-      parameters:
-        type: object
-        properties:
-          message:
-            type: string
-            description: >-
-              The message to display. Use $SHELLM_PREVIOUS here to display output
-              of previous tools.
-      exec: 'echo "${message}"'
+      exec: 'echo "{{message}}"'
   ask:
     type: function
     function:
@@ -107,8 +94,22 @@ tools:
               The question to display. Use $SHELLM_PREVIOUS here to display output
               of previous tools.
         required:
-          - message
-      exec: 'read -p "${question} " 2>/dev/tty; echo "$REPLY"'
+          - question
+      exec: 'echo "[{{question}}]" >/dev/tty;read -p "[{{question}}]: " </dev/tty >/dev/tty; echo "$REPLY"'
+  say:
+    type: function
+    function:
+      name: say
+      description: Display a static message to the user.
+      parameters:
+        type: object
+        properties:
+          message:
+            type: string
+            description: >-
+              The message to display. Use $SHELLM_PREVIOUS here to display output
+              of previous tools.
+      exec: 'echo "{{message}}"'
   generate:
     type: function
     function:
@@ -131,7 +132,7 @@ tools:
           - prompt
       # language=sh
       exec: |
-        generate_response "${prompt}" 200 $( [[ "${json}" == "true" ]] && echo '-j' )
+        generate_response "{{prompt}}" 200
   conditional:
     type: function
     function:
@@ -154,7 +155,7 @@ tools:
         required:
           - predicate
           - tools
-      exec: 'echo "${message}"'
+      exec: 'echo "{{message}}"'
   while:
     type: function
     function:
@@ -182,17 +183,18 @@ tools:
           - tools
       # language=sh
       exec: >-
-        tools=$(echo '${tools}' | jq -c '.[]');
-        apply_tool_calls "$tools";
-        generate_response -j "${predicate}";
-  #      while :; do
-  #          for tool_call in "${tools[@]}"; do
-  #              apply_tool_calls "$tool_call"
-  #          done
-  #          if ! generate_response -j "$predicate"; then
-  #              break
-  #          fi
-  #      done
+        echo "Jup: {{tools}}";
+        mapfile -t tools < <(echo '{{tools}}' | jq -c '.[]');
+        echo "TOOLS: ${tools[*]}" > /dev/tty;
+        apply_tool_calls "${tools[@]}";
+        local predicate_result=$(generate_response "{{SHELLM_OUTPUT}} - {{predicate}}");
+        echo "PREDICATE: $predicate_result";
+#        while :; do
+#            apply_tool_calls "${tools[@]}";
+#            if ! generate_response -j "$predicate"; then
+#                break
+#            fi
+#        done
   foreach:
     type: function
     function:
@@ -215,4 +217,4 @@ tools:
         required:
           - predicate
           - tools
-      exec: 'echo "${message}"'
+      exec: 'echo "{{message}}"'

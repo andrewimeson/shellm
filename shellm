@@ -25,6 +25,7 @@ THINK_PIPE="/tmp/SHELLM_THINK"
 
 # Create named pipes if they don't exist
 [[ -p $CHAT_PIPE ]] || mkfifo $CHAT_PIPE
+# TODO: Read from input so that thought processed can be chained by piping
 [[ -p $THINK_PIPE ]] || mkfifo $THINK_PIPE
 
 # Remove named pipes on script exit
@@ -85,7 +86,6 @@ load_config() {
 
 }
 
-
 # Initialize the tools by loading them from the JSON file
 load_config
 
@@ -103,33 +103,46 @@ usage() {
 
 # Function to generate a response from the model
 generate_response() {
-  local prompt="$1"
+  log debug "generate_response"
+
   local num_predict="$NUM_PREDICT"  # Fallback to global default if not set by -n
   local json_format=0  # Flag for JSON format
-
-  # Parse options within generate_response
-  while getopts ":n:j" opt; do
-    case $opt in
-      n) num_predict="$OPTARG" ;;  # Set num_predict from argument
-      j) json_format=1 ;;          # Enable JSON format
-      \?) log error "Invalid option: -$OPTARG"; usage ;;
-      :) log error "Option -$OPTARG requires an argument."; usage ;;
-    esac
-  done
-
-  shift $((OPTIND - 1))
+  local prompt="$1"
 
   # Escape the prompt and system prompt for JSON
+  local system_prompt
+  system_prompt="${PROMPTS["instruct"]}"
+  if [ $json_format -eq 1 ]; then
+    system_prompt+="\n
+        You MUST return a JSON object with the following structure:
+        { \"result\": <VALUE> }
+
+        Examples:
+        Input: Is the sky blue?
+        Output: { \"result\": true }
+
+        Input: Write a number between 1 and 50
+        Output: { \"result\": 36 }
+
+        Input: Name an animal
+        Output: { \"result\": \"cow\" }
+    "
+  fi
+  escaped_system_prompt=$(echo "$system_prompt" | jq -Rsa .)
+  log debug "System prompt: $escaped_system_prompt"
+
+  options=$(jq -n \
+    --argjson num_predict "$num_predict" \
+    --argjson num_ctx 4096 \
+    --argjson json_format "$json_format" \
+    '{
+      num_predict: $num_predict,
+      num_ctx: $num_ctx
+    } + if $json_format == 1 then {format: "json"} else {} end'
+  )
   local escaped_prompt
   escaped_prompt=$(echo "$prompt" | jq -Rsa .)
-  escaped_system_prompt=$(echo "${PROMPTS["instruct"]}" | jq -Rsa .)
-  log debug "Escaped prompt for JSON: $escaped_prompt"
-
-  # Add "format": "json" if -j flag was set
-  local options
-  options="{\"num_predict\": $num_predict, \"num_ctx\": 4096"
-  [[ $json_format -eq 1 ]] && options+=", \"format\": \"json\""
-  options+="}"
+  log debug "User prompt: $escaped_prompt"
 
   # Capture the output of the streaming request into SHELLM_OUTPUT
   curl -sN "$API_URL/generate" \
@@ -183,7 +196,7 @@ generate_tool_calls() {
 #
 apply_tool_calls() {
   local tool_calls_array=("$@")
-  echo "${tool_calls_array[@]}";
+  log debug "Tool calls: ${tool_calls_array[*]}"
   for tool_call in "${tool_calls_array[@]}"; do
     log debug "Processing tool_call $tool_call"
     local tool_name
@@ -194,11 +207,12 @@ apply_tool_calls() {
     log tool "Calling '$tool_name'"
     if [ -z "$tool_def" ]; then
       log error "Error: Tool '$tool_name' not found in TOOLS array."
+      exit 1
     fi
 
     # Fetch the 'exec' command template
     local exec_cmd_template
-    exec_cmd_template=$(echo "$tool_def" | jq -r '.function.exec')
+    exec_cmd_template=$(echo "$tool_def" | jq -rc '.function.exec')
 
     # Interpolate parameters from tool_call into the exec command
     local interpolated_cmd="$exec_cmd_template"
@@ -221,16 +235,17 @@ apply_tool_calls() {
         value="$(echo "$value" | escape)"
 
       fi
-
-      interpolated_cmd="${interpolated_cmd//\$\{$param\}/$value}"
+      # Replace {{parameter}} syntax with actual values
+      interpolated_cmd="${interpolated_cmd//\{\{$param\}\}/$value}"
     done
 
-    # Interpolate SHELLM_PREVIOUS and SHELLM_OUTPUT into the command
-    interpolated_cmd=${interpolated_cmd//\$SHELLM_PREVIOUS/$SHELLM_PREVIOUS}
-    interpolated_cmd=${interpolated_cmd//\$SHELLM_OUTPUT/$SHELLM_OUTPUT}
+    # Interpolate SHELLM_PREVIOUS and SHELLM_OUTPUT
+    interpolated_cmd="${interpolated_cmd//\{\{SHELLM_PREVIOUS\}\}/$SHELLM_PREVIOUS}"
+    interpolated_cmd="${interpolated_cmd//\{\{SHELLM_OUTPUT\}\}/$SHELLM_OUTPUT}"
+
 
     log tool "Executing command: $interpolated_cmd"
-    generate_response "You are the inner monologue of the AI. You keep concise records of past and future actions to improve your world model. This future action must be summarized into human language and condensed into a single bullet point, starting with \"I will\": ('$interpolated_cmd')"
+    #generate_response "You are the inner monologue of the AI. You keep concise records of past and future actions to improve your world model. This future action must be summarized into human language and condensed into a single bullet point, starting with \"I will\": ('$interpolated_cmd')"
     # Execute the interpolated command, capturing all details
     exit_code=0
 
@@ -251,18 +266,14 @@ apply_tool_calls() {
     else
       log tool "Result: $SHELLM_PREVIOUS"
     fi
-
-    # If the tool is "say", echo its output to the terminal
-#    if [ "$tool_name" == "say" ]; then
-      echo "$SHELLM_PREVIOUS" | escape
-      SHELLM_OUTPUT+=$SHELLM_PREVIOUS
-#    fi
+    echo "$SHELLM_PREVIOUS" > /dev/tty
+    SHELLM_OUTPUT+=$SHELLM_PREVIOUS
   done
 }
 
 # Generate a toolchain based on a prompt. Then immediately apply it
 generate_and_apply_tool_calls() {
-  local tool_calls_array=($(generate_tool_calls "$1"))
+  mapfile -t tool_calls_array < <(generate_tool_calls "$1")
   apply_tool_calls "${tool_calls_array[@]}"
 }
 # Parse command line options
@@ -337,18 +348,18 @@ gather_system_info() {
 
   # Gather terminal, hostname, and OS type information
   terminal_info=$(echo "$TERM")
-  os_info=$(uname -s)  # Get the OS type
+  os_info=$(cat /etc/os-release)  # Get the OS type
 
   # Create a formatted output
   echo "Terminal: $terminal_info\nOS Type: $os_info"
 }
 
-tool_calls=(
-   '{"function":{"name":"while","arguments":{"predicate":"The joke was considered funny","tools":[{"function":{"name":"say","arguments":{"message":"Hi"}}}]}}}'
- )
-
-# apply_tool_calls "${tool_calls[@]}"
+#tool_calls=(
+#   '{"function":{"name":"while","arguments":{"predicate":"The joke was considered funny","tools":[{"function":{"name":"say","arguments":{"message":"Hi"}}},{"function":{"name":"ask","arguments":{"question":"Was the joke funny?"}}}]}}}'
+# )
+#apply_tool_calls "${tool_calls[@]}"
 #exit
+
 # Check if the model exists, if not, pull it
 if ! check_model_exists; then
   pull_model
@@ -359,7 +370,7 @@ if [ "$USE_TOOL" -eq 1 ]; then
   escaped_description_prompt=$(
     jq \
     --arg prompt "$PROMPT" \
-    -n '"Create a concise title and subtitle to summarize the following task: \($prompt) "'
+    -n '"Create a sharp and concise title of the following assignment: \($prompt) "'
   )
   escaped_system_prompt=$(
     jq -n \
@@ -373,6 +384,8 @@ if [ "$USE_TOOL" -eq 1 ]; then
                '{"function":{"name":"generate","arguments":{"prompt":$prompt}}}')"
      "$(jq -n --argjson prompt "$escaped_system_prompt" \
                '{"function":{"name":"generate","arguments":{"prompt":$prompt}}}')"
+     "$(jq -n --argjson empty "$escaped_system_prompt" \
+               '{"function":{"name":"say","arguments":{"message":"\n# Workflow results\n\n"}}}')"
   )
 
   apply_tool_calls "${tool_calls[@]}"
@@ -387,7 +400,11 @@ if [ "$USE_TOOL" -eq 1 ]; then
 
   # Construct tool call JSON with jq
   tool_calls=(
-    "$(jq -n --arg output "$SHELLM_OUTPUT" '{"function": {"name": "generate", "arguments": {"prompt": ($output + "\n## Summary:\n")}}}')"
+   "$(jq -n --argjson empty "$escaped_system_prompt" \
+             '{"function":{"name":"say","arguments":{"message":"\n# Review\n\n"}}}')"
+    "$(jq -n \
+    --arg output "$SHELLM_OUTPUT" \
+    '{"function": {"name": "generate", "arguments": {"prompt": "# Task\n\nProvide a brief summary of the following content\n\n#Content\n\n\($output)\n\n## Summary:\n\n"}}}')"
   )
 
   apply_tool_calls "${tool_calls[@]}"
